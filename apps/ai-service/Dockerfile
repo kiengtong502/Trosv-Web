@@ -2,7 +2,7 @@
 # TROSV ai-service - Python 3.12, Debian 13 "trixie" (khop convention
 # Debian cua cac image khac trong stack).
 # ============================================================
-FROM python:3.12-slim-trixie
+FROM python:3.15-slim-trixie
 
 ARG INSTALL_DEV="false"
 
