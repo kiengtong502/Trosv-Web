@@ -1,0 +1,132 @@
+name: Deploy
+
+# Deploy gate: this workflow runs when the CI workflow completes on `stable`,
+# and actually deploys ONLY when ALL of the following hold:
+#   1. CI concluded "success" on the same commit that is now the tip of
+#      `stable` (re-checked inside the job - a stale CI run finishing late
+#      after a newer push must not deploy old code).
+#   2. The deploy secrets are configured in the `production` environment
+#      (otherwise the job skips with a warning instead of failing red).
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [stable]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-stable
+  cancel-in-progress: false # never cancel an in-flight deploy
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: stable
+          fetch-depth: 1
+
+      - name: Gate - CI ran on the current tip of stable
+        id: gate
+        run: |
+          TIP="$(git rev-parse HEAD)"
+          CI_SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "stable tip: $TIP"
+          echo "ci run sha:  $CI_SHA"
+          if [ "$TIP" != "$CI_SHA" ]; then
+            echo "::warning::CI ran on $CI_SHA but stable tip is $TIP - skipping deploy. The newer push will deploy when its CI finishes."
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate - deploy secrets configured
+        id: secrets
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        if: steps.gate.outputs.match == 'true'
+        run: |
+          if [ -z "$HOST" ] || [ -z "$USER" ] || [ -z "$KEY" ]; then
+            echo "::warning::Deploy secrets (DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY) are not set on the 'production' environment - skipping deploy. Configure them to enable automatic deploys (see docs/runbooks/DEPLOY.md)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH (docker compose)
+        # action-pinned per repo policy (audit run 3): mutable tags are forbidden.
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        if: steps.gate.outputs.match == 'true' && steps.secrets.outputs.configured == 'true'
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.DEPLOY_PATH }}
+            git fetch origin stable --tags
+            git checkout stable
+            # Remember what is live now, so a failed smoke test can roll back to it.
+            git rev-parse HEAD > .deploy-previous-sha
+            git reset --hard ${{ github.event.workflow_run.head_sha }}
+            # Single production-tier compose: TLS mode = profile "tls" + DOMAIN
+            # trong .env.
+            docker compose --profile tls up -d --build
+            docker compose ps
+
+      - name: Post-deploy smoke
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        if: steps.gate.outputs.match == 'true' && steps.secrets.outputs.configured == 'true'
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.DEPLOY_PATH }}
+            # TLS profile khong publish port backend ra host - smoke phai di
+            # qua Caddy (443). --resolve de neu DNS chua tro ve may chu van test duoc.
+            DOMAIN="$(grep -E '^DOMAIN=' .env | cut -d= -f2- | tr -d '\"')"
+            [ -n "$DOMAIN" ] || { echo "DOMAIN khong co trong .env"; exit 1; }
+            R="--resolve $DOMAIN:443:127.0.0.1"
+            for i in $(seq 1 30); do
+              if curl -sf $R "https://$DOMAIN/api/health" > /dev/null; then break; fi
+              [ "$i" = 30 ] && { echo "API chua healthy sau 60s"; docker compose logs --tail 50 backend; exit 1; }
+              sleep 2
+            done
+            echo "api/health: OK"
+            CODE_FE="$(curl -s -o /dev/null -w '%{http_code}' $R https://$DOMAIN/)"
+            CODE_API="$(curl -s -o /dev/null -w '%{http_code}' $R https://$DOMAIN/api/cities)"
+            echo "frontend: $CODE_FE - cities: $CODE_API"
+            [ "$CODE_FE" = "200" ] && [ "$CODE_API" = "200" ]
+
+      # If the new version did not come up healthy, put the previous one back and
+      # keep the job red so the failure is not missed.
+      - name: Roll back to the previous version
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        if: failure() && steps.gate.outputs.match == 'true' && steps.secrets.outputs.configured == 'true'
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.DEPLOY_PATH }}
+            [ -s .deploy-previous-sha ] || { echo "no previous version recorded - cannot roll back"; exit 1; }
+            PREV="$(cat .deploy-previous-sha)"
+            echo "rolling back to $PREV"
+            git reset --hard "$PREV"
+            docker compose --profile tls up -d --build
+            docker compose ps

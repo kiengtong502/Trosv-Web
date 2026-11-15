@@ -1,0 +1,18 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+    - phpstan-baseline.neon
+
+parameters:
+    # Strictest level. Fix findings, do not baseline them.
+    level: max
+    # config/ is stock Laravel boilerplate (env() casts); everything we own is analysed.
+    paths:
+        - app
+        - bootstrap
+        - database
+        - routes
+    treatPhpDocTypesAsCertain: false
+    reportUnmatchedIgnoredErrors: true
+    checkMissingCallableSignature: true
+    checkTooWideReturnTypesInProtectedAndPublicMethods: true
+    checkUninitializedProperties: true

@@ -1,0 +1,112 @@
+# TROSV SPA - server {} context is provided by nginx's main config
+# (conf.d/app.conf is rendered from this template by envsubst).
+#
+# THU TU LOCATION CO Y NGHIA (nginx regex = first match wins):
+# 1. Backend prefixes (regex)  - /api /storage /attachments /broadcasting
+# 2. Static asset extensions   - hashed assets + leaflet images/fonts
+# 3. SPA fallback (/)          - moi route con lai tra index.html
+# Neu doi thu tu, /storage/*.jpg se bi nuot boi location (2) va tra 404
+# (bug that da xay ra: anh khong hien khi chay same-origin).
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # ---- Security headers (API responses get theirs from Laravel) ----
+    include security-headers.conf;
+
+    # ---- Compression (SVG & static text assets for fast loading) ------
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_min_length 256;
+    gzip_types
+        application/javascript
+        application/json
+        image/svg+xml
+        text/css
+        text/plain;
+
+    # ---- (1) Backend-owned prefixes -> proxy --------------------------
+    #   /api/           JSON API
+    #   /storage/       anh tin dang (URL tao tu APP_URL cua backend)
+    #   /attachments/   URL ky 60 phut mo dinh kem trong tab moi
+    #   /broadcasting/  Echo private-channel auth (POST /broadcasting/auth)
+    # Phai dung REGEX location + dat truoc location (2), vi /storage/*.jpg
+    # ket thuc bang ".jpg" - neu location (2) khop truoc se tra 404.
+    #
+    # nginx resolves a STATIC proxy_pass hostname once at startup - when
+    # compose re-creates the backend container (new IP), the frontend would
+    # 502 until restarted. Variable proxy_pass + the embedded DNS resolver
+    # re-resolves per request, so `up -d --build backend` alone no longer
+    # breaks the running frontend.
+    # The resolver IP is substituted at container start by the nginx image
+    # envsubst mechanism (templates/*.template): 127.0.0.11 = Docker embedded
+    # DNS; podman rootless uses the network gateway (e.g. 10.89.0.1) - set
+    # NGINX_DNS_RESOLVER in an override file for that case.
+    resolver ${NGINX_DNS_RESOLVER} valid=10s ipv6=off;
+    set $backend_upstream http://backend:8000;
+
+    # Browser WebSockets use the website origin, avoiding host port conflicts.
+    location ^~ /app/ {
+        set $reverb_upstream http://reverb:8080;
+        proxy_pass $reverb_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+    }
+
+    location ~ ^/(api|storage|attachments|broadcasting)(/|$) {
+        # Uploads: 5 anh x 2MB (tin dang) hoac tep tin nhan 5MB. Mac dinh cua
+        # nginx la 1MB => 413 truoc khi toi API. Khop request_body cua backend.
+        client_max_body_size 16m;
+        proxy_pass $backend_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # This is the local HTTP edge; do not preserve a client-supplied IP chain.
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ---- (2) Static assets (SPA bundle) -------------------------------
+    # Hashed assets: immutable, cache forever.
+    location /assets/ {
+        include security-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # Public art SVGs: revalidate with ETag to prevent stale cached art
+    location ^~ /art/ {
+        include security-headers.conf;
+        add_header Cache-Control "no-cache, must-revalidate";
+        try_files $uri =404;
+    }
+
+    # Leaflet images + fonts: not hashed, cache moderately.
+    location ~* \.(png|jpg|jpeg|svg|webp|ico|woff2?)$ {
+        include security-headers.conf;
+        add_header Cache-Control "public, max-age=604800";
+        try_files $uri =404;
+    }
+
+    # ---- (3) SPA fallback: every route serves index.html --------------
+    location / {
+        include security-headers.conf;
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Never cache the shell - it references the hashed assets.
+    location = /index.html {
+        include security-headers.conf;
+        add_header Cache-Control "no-cache";
+    }
+
+}

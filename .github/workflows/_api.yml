@@ -1,0 +1,85 @@
+name: API (reusable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: api
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16-trixie
+        env:
+          POSTGRES_DB: rental_test
+          POSTGRES_USER: rental
+          POSTGRES_PASSWORD: rental
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rental"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      # Supply chain: actions are pinned to commit SHAs (a tag can be repointed,
+      # a commit cannot). The trailing comment keeps the version readable.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - run: composer validate --strict
+
+      - uses: ./.github/actions/setup-php
+        with:
+          coverage: pcov
+
+      - name: Pint (style)
+        run: ./vendor/bin/pint --test
+
+      # Larastan at the strictest level. The baseline freezes only the debt that
+      # existed when it was introduced: any NEW finding fails the job.
+      - name: PHPStan / Larastan (level max)
+        run: ./vendor/bin/phpstan analyse --no-progress --memory-limit=1G --error-format=github
+
+      # Debt ratchet: the baseline may shrink, never grow. Compares with the target branch.
+      - name: PHPStan baseline must not grow
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          before="$(git show "origin/$BASE_REF:apps/api/phpstan-baseline.neon" | grep -c 'message:' || true)"
+          after="$(grep -c 'message:' apps/api/phpstan-baseline.neon || true)"
+          echo "baseline entries: $before -> $after"
+          if [ "$after" -gt "$before" ]; then
+            echo "::error::phpstan-baseline.neon grew ($before -> $after). Fix the new findings instead of baselining them."
+            exit 1
+          fi
+
+      - name: Copy env for tests
+        run: |
+          cp .env.example .env
+          php artisan key:generate --force
+
+      # phpunit.xml fails on warnings, notices, deprecations, risky tests and
+      # stray output, so green means zero warnings. --min is a ratchet: measured 97.1%
+      # when it was added; raise it when coverage rises, never lower it.
+      - name: Tests
+        run: php artisan test --coverage --min=96
+        env:
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: rental_test
+          DB_USERNAME: rental
+          DB_PASSWORD: rental
+
+      - name: Composer audit
+        run: composer audit --locked --no-interaction

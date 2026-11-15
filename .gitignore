@@ -1,0 +1,75 @@
+# ===== Environment & secrets (mọi cấp thư mục) =====
+.env
+.env.*
+!.env.example
+!.env.production.example
+*.pem
+*.key
+auth.json
+
+# ===== File cá nhân, không commit =====
+PROMPTS.md
+
+# ===== OS junk =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== IDE / Editor =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+
+# ===== Logs & caches =====
+*.log
+.phpunit.result.cache
+.phpunit.cache/
+
+# ===== Dependencies (apps/api, apps/web, apps/ai-service) =====
+node_modules/
+vendor/
+
+# ===== Python (apps/ai-service) =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ===== Frontend build output =====
+dist/
+build/
+
+# ===== Laravel runtime (apps/api/storage) =====
+storage/app/private/*
+storage/app/public/*
+storage/framework/cache/data/*
+storage/framework/sessions/*
+storage/framework/testing/*
+storage/framework/views/*
+storage/logs/*
+storage/*.key
+!**/.gitignore
+
+# ===== Không bao giờ commit khóa DB/API thật =====
+*.sql.dump
+*.dump
+
+# AI tooling (personal, not project code)
+.agents/
+.claude/
+skills-lock.json
+.browser-check/
+docker-compose.local-test.yml
+freebuff-chat-*.md
+apps/web/src/styles/.css-baseline/
+
+# Backups (backup.sh ghi vao ./backups hoac BACKUP_DIR bat ky)
+backups/
+
+# Test artifacts
+test-results/
+playwright-report/
+.deploy-previous-sha

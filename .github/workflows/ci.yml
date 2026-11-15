@@ -1,0 +1,148 @@
+name: CI
+
+# The pipeline is split by area into reusable workflows (_api, _web, _ai, _infra,
+# _e2e, _stack) and local composite actions (.github/actions/*). This file only decides
+# WHAT runs (path filters) and gates the result (ci-ok).
+on:
+  push:
+    branches: [unstable, stable]
+  pull_request:
+    branches: [unstable, stable]
+  merge_group:
+  workflow_dispatch:
+
+# Least privilege: jobs only read the repo. Anything that needs more says so itself.
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR replaces the running CI. `stable` is never
+# cancelled: the Deploy workflow keys off its CI result.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/stable' }}
+
+env:
+  CI: "true"
+  COMPOSER_NO_INTERACTION: "1"
+  NPM_CONFIG_FUND: "false"
+  NPM_CONFIG_UPDATE_NOTIFIER: "false"
+
+jobs:
+  # Which parts of the repo did this change touch? Pushes, merge queues and manual
+  # runs always run everything; pull requests only run what they can affect.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+      ai: ${{ steps.filter.outputs.ai }}
+      infra: ${{ steps.filter.outputs.infra }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          emit() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
+          if [ "$EVENT" != "pull_request" ]; then
+            for k in api web ai infra e2e; do emit "$k" true; done
+            exit 0
+          fi
+          files="$(git diff --name-only "$BASE...$HEAD")"
+          hit() { printf '%s\n' "$files" | grep -Eq "$1" && echo true || echo false; }
+          # Shared inputs (CI itself, compose, Makefile) can affect every area.
+          shared='^(\.github/|docker-compose\.yml$|Makefile$|\.env\.example$)'
+          api="$(hit "^apps/api/|$shared")"
+          web="$(hit "^apps/web/|$shared")"
+          ai="$(hit "^apps/ai-service/|$shared")"
+          infra="$(hit "^(apps/[^/]+/Dockerfile|infra/|scripts/)|$shared")"
+          # The browser tests exercise API + web together, and need the web bundle.
+          e2e=false
+          if [ "$api" = true ] || [ "$web" = true ]; then e2e=true; web=true; fi
+          emit api "$api"; emit web "$web"; emit ai "$ai"; emit infra "$infra"; emit e2e "$e2e"
+
+  api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    uses: ./.github/workflows/_api.yml
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    uses: ./.github/workflows/_web.yml
+
+  ai-service:
+    needs: changes
+    if: needs.changes.outputs.ai == 'true'
+    uses: ./.github/workflows/_ai.yml
+
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/_infra.yml
+
+  # Real browser against a real seeded API + the production bundle. Also gates the
+  # Deploy workflow (it fires on CI success on stable), so a red e2e blocks deploys.
+  e2e:
+    needs: [changes, api, web, ai-service]
+    if: needs.changes.outputs.e2e == 'true' && !cancelled() && !failure()
+    uses: ./.github/workflows/_e2e.yml
+
+  # The real docker compose stack (nginx + FrankenPHP + Reverb + workers) - what ships. Runs
+  # whenever anything that can change it changed; also gates Deploy via ci-ok.
+  stack:
+    needs: changes
+    if: needs.changes.outputs.api == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.infra == 'true'
+    uses: ./.github/workflows/_stack.yml
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0 # full history so gitleaks scans past commits too
+
+      # Blocking since triage confirmed zero findings across all 157 commits
+      # (baseline run). --redact hides matched secret values from the log. If
+      # a future scan ever fails on a known-acceptable finding, add an inline
+      # allowlist with a justification comment in .gitleaksignore.
+      # Supply chain (audit run 3): image pinned to an immutable digest, and
+      # the repo is mounted read-only - the scanner needs no write access.
+      - name: gitleaks (blocking)
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" --workdir /repo \
+            zricethezav/gitleaks:v8.30.1@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb \
+            detect --source /repo --redact -v
+
+  # The single check to require in branch protection. Areas skipped by the path
+  # filter are fine; a failed or cancelled job is not.
+  ci-ok:
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, api, web, ai-service, infra, e2e, stack, secrets]
+    steps:
+      - name: Every job succeeded or was legitimately skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          {
+            echo "### CI result"
+            echo "| job | result |"
+            echo "|---|---|"
+            echo "$NEEDS" | jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"'
+          } >> "$GITHUB_STEP_SUMMARY"
+          bad="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result != "success" and .value.result != "skipped") | .key')"
+          if [ -n "$bad" ]; then
+            echo "::error::failed or cancelled: $(echo "$bad" | tr '\n' ' ')"
+            exit 1
+          fi
