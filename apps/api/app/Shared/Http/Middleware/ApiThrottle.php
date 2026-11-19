@@ -6,7 +6,6 @@ use Closure;
 use Illuminate\Cache\RateLimiter;
 use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
-use Illuminate\Routing\Controllers\Middleware;
 use Illuminate\Support\InteractsWithTime;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -28,7 +27,8 @@ class ApiThrottle
         $identifier = $user ? 'u:'.$user->id : 'ip:'.$request->ip();
         $key = 'api-throttle:'.$identifier.':'.sha1($request->method().'|'.$request->getPathInfo());
 
-        if ($this->limiter->tooManyAttempts($key, $maxAttempts)) {
+        // Reserve the slot atomically before running slow work; route decay is in minutes.
+        if ($this->limiter->hit($key, $decayMinutes * 60) > $maxAttempts) {
             throw new ThrottleRequestsException(
                 'Bạn đã gửi quá nhiều yêu cầu. Vui lòng thử lại sau.',
                 null,
@@ -36,10 +36,7 @@ class ApiThrottle
             );
         }
 
-        $response = $next($request);
-
-        // Route parameters use minutes, while RateLimiter expects seconds.
-        return tap($response, fn () => $this->limiter->hit($key, $decayMinutes * 60));
+        return $next($request);
     }
 
     /**
