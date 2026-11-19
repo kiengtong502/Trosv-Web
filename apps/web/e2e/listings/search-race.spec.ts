@@ -3,6 +3,55 @@ import type { Listing } from "../../src/shared/types/api";
 
 const API = "http://localhost:8000/api";
 
+for (const mobile of [false, true]) {
+  test(`map includes rooms beyond the first 50 on ${mobile ? "mobile" : "desktop"}`, async ({
+    page,
+    request,
+  }) => {
+    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 });
+    const fixture = await request.get(`${API}/listings?per_page=1`);
+    expect(fixture.ok()).toBe(true);
+    const { data } = (await fixture.json()) as { data: Listing[] };
+    expect(data.length).toBeGreaterThan(0);
+    const rooms = Array.from({ length: 61 }, (_, index): Listing => ({
+      ...data[0]!,
+      id: 1001 + index,
+      title: index === 60 ? "Beyond room 50" : `Map fixture ${String(index + 1)}`,
+      latitude: index === 60 ? 10.9 : 10.77,
+      longitude: index === 60 ? 106.9 : 106.66,
+    }));
+    const mapPages: number[] = [];
+    await page.route(/\/api\/listings(?:\?|$)/, async (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      const currentPage = Number(params.get("page") || 1);
+      const perPage = Number(params.get("per_page") || 12);
+      if (perPage === 50) mapPages.push(currentPage);
+      await route.fulfill({
+        json: {
+          data: rooms.slice((currentPage - 1) * perPage, currentPage * perPage),
+          meta: {
+            current_page: currentPage,
+            last_page: Math.ceil(rooms.length / perPage),
+            total: rooms.length,
+            per_page: perPage,
+          },
+        },
+      });
+    });
+    await page.goto("/rooms");
+    if (mobile) await page.getByRole("button", { name: "Xem bản đồ", exact: true }).last().click();
+    const pin = page.getByTestId("map-pane").locator('.trosv-pin[aria-label*="Beyond room 50"]');
+    await expect(pin).toBeVisible();
+    expect(mapPages).toContain(2);
+    if (mobile)
+      await page.getByRole("button", { name: "Xem danh sách", exact: true }).last().click();
+    await page.getByRole("button", { name: "Trang cuối", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Beyond room 50", exact: true })).toBeVisible();
+    if (mobile) await page.getByRole("button", { name: "Xem bản đồ", exact: true }).last().click();
+    await expect(pin).toBeVisible();
+  });
+}
+
 test("late search responses cannot replace the latest room list or map", async ({
   page,
   request,

@@ -22,6 +22,29 @@ import {
   type ListingFilters,
 } from "../lib/searchFilters";
 
+/** Load one list page and every map page for the same filters. */
+async function loadSearchResults(
+  filters: ListingFilters,
+  currentPage: number,
+  isCurrent: () => boolean,
+) {
+  const mapParams = filtersToApiParams(filters, 1, MAP_PAGE_SIZE);
+  const [paged, first] = await Promise.all([
+    getListings(filtersToApiParams(filters, currentPage)),
+    getListings(mapParams),
+  ]);
+  const rows = [...first.data];
+  for (let page = 2; page <= (first.meta.last_page ?? 1); page += 1) {
+    if (!isCurrent()) return null;
+    const next = await getListings({ ...mapParams, page });
+    rows.push(...next.data);
+  }
+  return {
+    paged,
+    mapListings: [...new Map(rows.map((listing) => [listing.id, listing])).values()],
+  };
+}
+
 /**
  * Listing search for the /rooms page: filter state, reference data
  * (cities/wards/schools/amenities), debounced fetch with URL-sync for
@@ -71,23 +94,22 @@ export function useListingSearch() {
     async (currentPage: number, request: number) => {
       setLoading(true);
       setError("");
-      const params = filtersToApiParams(filters, currentPage);
+      const isCurrent = () => request === latestRequestRef.current;
 
       try {
-        const mapParams = filtersToApiParams(filters, 1, MAP_PAGE_SIZE);
-        const [pagedRes, mapRes] = await Promise.all([getListings(params), getListings(mapParams)]);
-        if (request !== latestRequestRef.current) return;
-        setListings(pagedRes.data);
-        setMeta(pagedRes.meta);
-        setMapListings(mapRes.data);
+        const results = await loadSearchResults(filters, currentPage, isCurrent);
+        if (!results || !isCurrent()) return;
+        setListings(results.paged.data);
+        setMeta(results.paged.meta);
+        setMapListings(results.mapListings);
       } catch (err) {
-        if (request !== latestRequestRef.current) return;
+        if (!isCurrent()) return;
         setError(errMessage(err));
         setListings([]);
         setMapListings([]);
         setMeta(null);
       } finally {
-        if (request === latestRequestRef.current) setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     },
     [filters],
