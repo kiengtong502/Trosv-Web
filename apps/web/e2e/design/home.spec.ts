@@ -4,6 +4,25 @@ const WORDS = ["Gần trường.", "Giá rẻ.", "Tiện lợi."];
 const typed = (page: Page) => page.getByTestId("typed-word");
 const hero = (page: Page) => page.locator('[data-testid="plate-band"][data-size="hero"]');
 
+for (const width of [1920, 1360, 390]) {
+  test(`school suggestions stay clickable below the hero at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/schools", (route) =>
+      route.fulfill({
+        json: {
+          data: [1, 2, 3, 4].map((id) => ({ id, name: `Test school ${id}` })),
+        },
+      }),
+    );
+    await page.goto("/");
+    await page.getByRole("searchbox").fill("Test school");
+    const last = hero(page).getByRole("link", { name: "Test school 4", exact: true });
+    await expect(last).toBeInViewport({ ratio: 1 });
+    await last.click();
+    await expect(page).toHaveURL(/\/rooms\?school_id=4/);
+  });
+}
+
 test.describe("home hero", () => {
   test.use({ viewport: { width: 1360, height: 900 } });
 

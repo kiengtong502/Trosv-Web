@@ -96,7 +96,7 @@ export function HeroDeck() {
     <div
       data-testid="hero-deck"
       aria-hidden="true"
-      className="pointer-events-none absolute right-5 top-1/2 hidden h-[290px] w-[468px] -translate-y-1/2 min-[1180px]:block"
+      className="pointer-events-none absolute right-5 top-1/2 hidden h-[290px] w-[468px] -translate-y-1/2 lg:right-8 xl:right-12 min-[1180px]:block"
     >
       <div className="relative size-full">
         {CARDS.map((c, i) => (

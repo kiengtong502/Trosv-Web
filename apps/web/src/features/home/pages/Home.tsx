@@ -53,7 +53,7 @@ function HeroSearch({ cities, schools }: { cities: City[]; schools: School[] }) 
             onChange={(e) => {
               setQ(e.target.value);
             }}
-            className="h-full min-w-0 flex-1 border-0 bg-transparent text-base text-ink placeholder:text-muted focus:outline-none"
+            className="hero-search-input h-full min-w-0 flex-1 border-0 bg-transparent text-base text-ink placeholder:text-muted focus:outline-none"
           />
           <button
             type="submit"
@@ -150,8 +150,8 @@ export default function Home() {
       {/* Hero: navy band, a quiet doodle pattern, the typed keyword and the newest rooms floating at the right */}
       <PlateBand
         size="hero"
-        className="md:min-h-0"
-        contentClassName="px-5 py-8 sm:px-5 md:px-5 md:py-10 min-[1180px]:pr-[508px]"
+        className="overflow-visible md:min-h-0"
+        contentClassName="px-5 py-8 sm:px-5 md:px-5 md:py-10 lg:max-w-none lg:px-8 xl:px-12 min-[1180px]:pr-[508px]"
         headingClassName="max-w-xl lg:text-5xl"
         title={
           <>
@@ -191,7 +191,7 @@ export default function Home() {
         <HeroDeck />
       </PlateBand>
 
-      <div className="mx-auto w-full max-w-6xl px-5">
+      <div className="mx-auto w-full max-w-6xl px-5 lg:max-w-none lg:px-8 xl:px-12">
         {/* Mới đăng: recent rooms on a clothesline, right under the hero */}
         <section className="pb-6 pt-8">
           <div className="mb-1 flex items-center justify-between">

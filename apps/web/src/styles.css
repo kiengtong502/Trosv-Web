@@ -237,6 +237,10 @@
     --tw-ring-shadow: 0 0 #0000;
   }
 
+  .bg-band .hero-search-input:focus-visible {
+    outline: none;
+  }
+
   /* Typing indicator: three dots bouncing in turn. */
   .typing-dot {
     width: 6px;
