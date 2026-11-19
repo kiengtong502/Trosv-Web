@@ -32,7 +32,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-it("merges realtime messages arriving before initial load without advancing past HTTP gaps", async () => {
+it("retries a stale initial load without losing realtime messages or HTTP gaps", async () => {
   const initial = deferred();
   const catchup = deferred();
   mocks.getMessages.mockReturnValueOnce(initial.promise).mockReturnValueOnce(catchup.promise);
@@ -47,14 +47,15 @@ it("merges realtime messages arriving before initial load without advancing past
     await initial.promise;
   });
   await waitFor(() => {
-    expect(mocks.getMessages).toHaveBeenCalledWith(9, 500);
+    expect(mocks.getMessages).toHaveBeenCalledTimes(2);
   });
-  expect(result.current.messages.map((row) => row.id)).toEqual([1, 500, 503]);
+  expect(mocks.getMessages).toHaveBeenLastCalledWith(9, null);
+  expect(result.current.messages.map((row) => row.id)).toEqual([503]);
   expect(result.current.lastIdRef.current).toBe(503);
   expect(result.current.loaded).toBe(false);
   expect(mocks.markRead).not.toHaveBeenCalled();
   await act(async () => {
-    catchup.resolve([message(501), message(502), message(503)]);
+    catchup.resolve([message(1), message(500), message(501), message(502), message(503)]);
     await catchup.promise;
   });
   await waitFor(() => {
@@ -64,7 +65,7 @@ it("merges realtime messages arriving before initial load without advancing past
   expect(mocks.markRead).toHaveBeenCalledOnce();
 });
 
-it("catches up missed messages after reconnect and coalesces overlapping sync requests", async () => {
+it("loads new messages incrementally and coalesces overlapping sync requests", async () => {
   mocks.getMessages.mockResolvedValueOnce([message(1)]);
   const { result } = renderHook(() => useConversationData(9));
   await waitFor(() => {
@@ -86,6 +87,121 @@ it("catches up missed messages after reconnect and coalesces overlapping sync re
   });
   expect(mocks.getMessages).toHaveBeenLastCalledWith(9, 3);
   expect(result.current.messages.map((row) => row.id)).toEqual([1, 2, 3]);
+});
+
+it("refreshes old unsent messages, reactions, receipts and hidden rows after reconnect", async () => {
+  mocks.getMessages.mockResolvedValueOnce([message(1), message(2), message(3), message(4)]);
+  const { result } = renderHook(() => useConversationData(9));
+  await waitFor(() => {
+    expect(result.current.loaded).toBe(true);
+  });
+  const rows = [
+    { ...message(1), is_unsent: true, body: null, attachment_url: null },
+    { ...message(2), reactions: { "2": "❤️" } },
+    { ...message(3), seen_at: "2026-11-15T01:00:00Z" },
+    message(5),
+  ];
+  mocks.getMessages.mockResolvedValueOnce(rows);
+  act(() => {
+    result.current.syncMessages(true);
+  });
+  await waitFor(() => {
+    expect(result.current.messages).toEqual(rows);
+  });
+  expect(mocks.getMessages).toHaveBeenLastCalledWith(9, null);
+  expect(mocks.markRead).toHaveBeenCalledTimes(2);
+});
+
+it("does not overwrite live edits or restore hidden messages with an older refresh", async () => {
+  mocks.getMessages.mockResolvedValueOnce([message(1), message(2), message(3)]);
+  const { result } = renderHook(() => useConversationData(9));
+  await waitFor(() => {
+    expect(result.current.loaded).toBe(true);
+  });
+  const stale = deferred();
+  const fresh = deferred();
+  mocks.getMessages.mockReturnValueOnce(stale.promise).mockReturnValueOnce(fresh.promise);
+  act(() => {
+    result.current.syncMessages(true);
+  });
+  const changed = [
+    { ...message(1), is_unsent: true, body: null },
+    { ...message(2), reactions: { "1": "❤️" } },
+  ];
+  act(() => {
+    result.current.setMessages(changed);
+  });
+  await act(async () => {
+    stale.resolve([message(1), message(2), message(3)]);
+    await stale.promise;
+  });
+  await waitFor(() => {
+    expect(mocks.getMessages).toHaveBeenCalledTimes(3);
+  });
+  expect(result.current.messages).toEqual(changed);
+  expect(mocks.markRead).toHaveBeenCalledOnce();
+  expect(mocks.getMessages).toHaveBeenLastCalledWith(9, null);
+  await act(async () => {
+    fresh.resolve([...changed, message(4)]);
+    await fresh.promise;
+  });
+  await waitFor(() => {
+    expect(result.current.messages).toEqual([...changed, message(4)]);
+  });
+});
+
+it("keeps a reconnect refresh queued behind an incremental request", async () => {
+  mocks.getMessages.mockResolvedValueOnce([message(1)]);
+  const { result } = renderHook(() => useConversationData(9));
+  await waitFor(() => {
+    expect(result.current.loaded).toBe(true);
+  });
+  const incremental = deferred();
+  const updated = { ...message(1), seen_at: "2026-11-15T01:00:00Z" };
+  mocks.getMessages.mockReturnValueOnce(incremental.promise).mockResolvedValueOnce([updated]);
+  act(() => {
+    result.current.syncMessages();
+    result.current.syncMessages(true);
+    result.current.syncMessages();
+  });
+  expect(mocks.getMessages).toHaveBeenLastCalledWith(9, 1);
+  await act(async () => {
+    incremental.resolve([]);
+    await incremental.promise;
+  });
+  await waitFor(() => {
+    expect(result.current.messages).toEqual([updated]);
+  });
+  expect(mocks.getMessages).toHaveBeenLastCalledWith(9, null);
+});
+
+it("retries a failed reconnect refresh as a full history instead of skipping old changes", async () => {
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  try {
+    mocks.getMessages.mockResolvedValueOnce([message(1)]);
+    const { result } = renderHook(() => useConversationData(9));
+    await waitFor(() => {
+      expect(result.current.loaded).toBe(true);
+    });
+    mocks.getMessages.mockRejectedValueOnce(new Error("offline"));
+    act(() => {
+      result.current.syncMessages(true);
+    });
+    await waitFor(() => {
+      expect(warning).toHaveBeenCalledOnce();
+    });
+    const updated = { ...message(1), is_unsent: true, body: null };
+    mocks.getMessages.mockResolvedValueOnce([updated]);
+    act(() => {
+      result.current.syncMessages();
+    });
+    await waitFor(() => {
+      expect(result.current.messages).toEqual([updated]);
+    });
+    expect(mocks.getMessages).toHaveBeenLastCalledWith(9, null);
+  } finally {
+    warning.mockRestore();
+  }
 });
 
 it("does not mark an incomplete history read and retries from the last confirmed cursor", async () => {

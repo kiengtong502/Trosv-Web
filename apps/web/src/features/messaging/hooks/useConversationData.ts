@@ -18,16 +18,21 @@ export function useConversationData(id: string | number): {
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   loaded: boolean;
   lastIdRef: { current: number };
-  syncMessages: () => void;
+  syncMessages: (refresh?: boolean) => void;
 } {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [convLoaded, setConvLoaded] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessageRows] = useState<Message[]>([]);
+  const messageVersion = useRef(0);
+  const setMessages = useCallback<React.Dispatch<React.SetStateAction<Message[]>>>((update) => {
+    messageVersion.current += 1;
+    setMessageRows(update);
+  }, []);
   const [loaded, setLoaded] = useState(false);
   const lastIdRef = useRef(0);
-  const syncRef = useRef<() => void>(() => undefined);
-  const syncMessages = useCallback(() => {
-    syncRef.current();
+  const syncRef = useRef<(refresh?: boolean) => void>(() => undefined);
+  const syncMessages = useCallback((refresh = false) => {
+    syncRef.current(refresh);
   }, []);
 
   // Per-conversation state reset during render (React's recommended
@@ -38,7 +43,7 @@ export function useConversationData(id: string | number): {
     setPrevId(id);
     setConversation(null);
     setConvLoaded(false);
-    setMessages([]);
+    setMessageRows([]);
     setLoaded(false);
   }
 
@@ -64,23 +69,37 @@ export function useConversationData(id: string | number): {
     let cursor = 0;
     let pending = false;
     let queued = false;
+    let refreshQueued = false;
     lastIdRef.current = 0;
-    function sync(): void {
+    function sync(refresh = false): void {
+      refreshQueued ||= refresh;
       if (pending) {
         queued = true;
         return;
       }
       pending = true;
       queued = false;
-      getMessages(id, cursor || null)
+      const replace = refreshQueued;
+      refreshQueued = false;
+      const version = messageVersion.current;
+      getMessages(id, replace ? null : cursor || null)
         .then((rows) => {
           if (!active) return;
+          // A live action after this request started makes its snapshot stale.
+          if (version !== messageVersion.current) {
+            queued = true;
+            refreshQueued = true;
+            return;
+          }
           cursor = rows.at(-1)?.id ?? cursor;
           lastIdRef.current = Math.max(lastIdRef.current, cursor);
-          setMessages((current) => mergeMessages(current, rows));
+          setMessageRows((current) => (replace ? rows : mergeMessages(current, rows)));
           if (!queued) markRead(id).catch(ignoreError("mark read after sync"));
         })
-        .catch(ignoreError("load messages"))
+        .catch((error: unknown) => {
+          refreshQueued ||= replace;
+          ignoreError("load messages")(error);
+        })
         .finally(() => {
           pending = false;
           if (!active) return;

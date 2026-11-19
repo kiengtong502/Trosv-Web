@@ -34,7 +34,7 @@ export function useConversationRealtime(
   }: {
     setMessages: Dispatch<SetStateAction<Message[]>>;
     lastIdRef: { current: number };
-    syncMessages: () => void;
+    syncMessages: (refresh?: boolean) => void;
   },
   onPreviewEvent?: (msg: Message) => void,
 ): { otherTyping: boolean; setOtherTyping: Dispatch<SetStateAction<boolean>> } {
@@ -56,7 +56,7 @@ export function useConversationRealtime(
     const privateChan = echo.private(`conversation.${id}`) as unknown as EchoReactive;
     let active = true;
     privateChan.subscribed(() => {
-      if (active) syncRef.current();
+      if (active) syncRef.current(true);
     });
     privateChan.listen(".message.sent", (e: unknown) => {
       const msg = (e as MessageSentEvent).message;

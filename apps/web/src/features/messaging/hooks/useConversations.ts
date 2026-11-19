@@ -33,6 +33,7 @@ export function useConversations() {
     const channel = getEcho()?.private(`App.Models.User.${userId}`);
     channel?.listen(".message.sent", refresh);
     channel?.listen(".message.deleted", refresh);
+    channel?.listen(".pusher:subscription_succeeded", refresh);
     window.addEventListener(CONVERSATION_READ_EVENT, refresh);
 
     return () => {
@@ -40,6 +41,7 @@ export function useConversations() {
       // This user channel is shared by the sidebar and navigation badge.
       channel?.stopListening(".message.sent", refresh);
       channel?.stopListening(".message.deleted", refresh);
+      channel?.stopListening(".pusher:subscription_succeeded", refresh);
       window.removeEventListener(CONVERSATION_READ_EVENT, refresh);
     };
   }, [userId]);

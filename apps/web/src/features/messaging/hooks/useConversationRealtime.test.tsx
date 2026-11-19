@@ -74,6 +74,8 @@ it("requests catch-up on every successful subscription and ignores it after unmo
     subscribed();
   });
   expect(mocks.sync).toHaveBeenCalledTimes(2);
+  expect(mocks.sync).toHaveBeenNthCalledWith(1, true);
+  expect(mocks.sync).toHaveBeenNthCalledWith(2, true);
   unmount();
   subscribed();
   expect(mocks.sync).toHaveBeenCalledTimes(2);

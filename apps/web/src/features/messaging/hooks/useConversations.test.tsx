@@ -88,6 +88,33 @@ describe("live conversations and unread badges", () => {
       expect(badge.result.current).toBe(1);
     });
     expect(mocks.listeners.get(".message.sent")?.size).toBe(1);
+    expect(mocks.listeners.get(".pusher:subscription_succeeded")?.size).toBe(1);
+    mocks.getConversations.mockResolvedValue(rows(4));
+    act(() => emit(".pusher:subscription_succeeded"));
+    await waitFor(() => {
+      expect(badge.result.current).toBe(4);
+    });
+  });
+
+  it("refreshes missed messages and read counts each time the user channel reconnects", async () => {
+    const { result, unmount } = renderHook(() => useConversations());
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+    mocks.getConversations.mockResolvedValue(rows(3));
+    act(() => emit(".pusher:subscription_succeeded"));
+    await waitFor(() => {
+      expect(result.current.conversations).toEqual(rows(3));
+    });
+    mocks.getConversations.mockResolvedValue(rows(0));
+    act(() => emit(".pusher:subscription_succeeded"));
+    await waitFor(() => {
+      expect(result.current.conversations).toEqual(rows(0));
+    });
+    const requests = mocks.getConversations.mock.calls.length;
+    unmount();
+    act(() => emit(".pusher:subscription_succeeded"));
+    expect(mocks.getConversations).toHaveBeenCalledTimes(requests);
   });
 
   it("ignores an older unread response that arrives after a read refresh", async () => {
