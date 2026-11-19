@@ -134,13 +134,19 @@ class ConversationService
     public function sendRoomLinkIfNecessary(Conversation $conversation, User $student, Listing $listing): void
     {
         $roomPath = "/rooms/{$listing->id}";
-        $recentlySent = $conversation->messages()
-            ->where('sender_id', $student->id)
-            ->where('body', 'like', "%{$roomPath}%")
-            ->where('created_at', '>=', now()->subMinutes(15))
-            ->exists();
+        $messages = DB::transaction(function () use ($conversation, $student, $roomPath) {
+            // Serialize the check and both inserts for simultaneous contacts.
+            $conversation = Conversation::query()->lockForUpdate()->findOrFail($conversation->id);
+            $recentlySent = $conversation->messages()
+                ->where('sender_id', $student->id)
+                ->where('body', $roomPath)
+                ->where('created_at', '>=', now()->subMinutes(15))
+                ->exists();
 
-        if (! $recentlySent) {
+            if ($recentlySent) {
+                return [];
+            }
+
             $msg1 = $conversation->messages()->create([
                 'sender_id' => $student->id,
                 'body' => 'Chào bạn, mình quan tâm đến phòng trọ này:',
@@ -150,8 +156,12 @@ class ConversationService
                 'body' => $roomPath,
             ]);
             $conversation->touch();
-            rescue(fn () => event(new MessageSent($msg1->load(['sender:id', 'conversation']))), report: false);
-            rescue(fn () => event(new MessageSent($msg2->load(['sender:id', 'conversation']))), report: false);
+
+            return [$msg1, $msg2];
+        });
+
+        foreach ($messages as $message) {
+            rescue(fn () => event(new MessageSent($message->load(['sender:id', 'conversation']))), report: false);
         }
     }
 

@@ -87,6 +87,7 @@ class MessageSent implements ShouldBroadcastNow
                         'attachments.show',
                         now()->addMinutes(60),
                         ['message' => $m->id],
+                        false,
                     )
                     : null,
                 'created_at' => $m->created_at?->toISOString(),

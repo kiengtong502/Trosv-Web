@@ -7,6 +7,12 @@ use App\Modules\Listing\Models\Listing;
 use App\Modules\Messaging\Events\MessageSent;
 use App\Modules\Messaging\Models\Conversation;
 use App\Modules\Messaging\Models\Message;
+use GuzzleHttp\Client;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Message as HttpMessage;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
@@ -14,6 +20,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
+use Pusher\Pusher;
+use RuntimeException;
 use Tests\TestCase;
 
 class ConversationTest extends TestCase
@@ -163,6 +171,7 @@ class ConversationTest extends TestCase
 
     public function test_conversation_creation_deduplicates_automatic_messages_within_fifteen_minutes(): void
     {
+        $this->freezeTime();
         $this->actingAs($this->student, 'sanctum')
             ->postJson('/api/conversations', ['listing_id' => $this->listing->id])
             ->assertStatus(201);
@@ -174,6 +183,47 @@ class ConversationTest extends TestCase
             ->assertStatus(200);
 
         $this->assertDatabaseCount('messages', 2);
+
+        $this->travel(16)->minutes();
+        $this->actingAs($this->student, 'sanctum')
+            ->postJson('/api/conversations', ['listing_id' => $this->listing->id])
+            ->assertOk();
+        $this->assertDatabaseCount('messages', 4);
+    }
+
+    public function test_room_link_deduplication_does_not_confuse_listing_id_prefixes(): void
+    {
+        $longId = Listing::factory()->create([
+            'id' => $this->listing->id * 10,
+            'user_id' => $this->landlord->id,
+        ]);
+        $this->actingAs($this->student, 'sanctum')
+            ->postJson('/api/conversations', ['listing_id' => $longId->id])
+            ->assertCreated();
+        $this->postJson('/api/conversations', ['listing_id' => $this->listing->id])
+            ->assertOk()
+            ->assertJsonPath('data.last_message.body', "/rooms/{$this->listing->id}");
+
+        $this->assertDatabaseCount('messages', 4);
+        $this->assertSame(1, Message::where('body', "/rooms/{$longId->id}")->count());
+        $this->assertSame(1, Message::where('body', "/rooms/{$this->listing->id}")->count());
+    }
+
+    public function test_automatic_greeting_is_rolled_back_if_room_link_creation_fails(): void
+    {
+        Event::fake([MessageSent::class]);
+        Message::creating(static function (Message $message): void {
+            if (str_starts_with($message->body, '/rooms/')) {
+                throw new RuntimeException('Simulated room link insert failure.');
+            }
+        });
+
+        $this->actingAs($this->student, 'sanctum')
+            ->postJson('/api/conversations', ['listing_id' => $this->listing->id])
+            ->assertStatus(500);
+
+        $this->assertDatabaseCount('messages', 0);
+        Event::assertNotDispatched(MessageSent::class);
     }
 
     public function test_student_cannot_start_conversation_on_own_listing(): void
@@ -418,6 +468,52 @@ class ConversationTest extends TestCase
         });
     }
 
+    public function test_maximum_length_unicode_messages_fit_reverb_size_limits(): void
+    {
+        Event::fake([MessageSent::class]);
+        $conv = $this->createConversation();
+        $requests = [];
+        $handler = HandlerStack::create(new MockHandler([
+            new Response(200, [], '{}'),
+            new Response(200, [], '{}'),
+            new Response(200, [], '{}'),
+        ]));
+        $handler->push(Middleware::history($requests));
+        $pusher = new Pusher('test-key', 'test-secret', 'test-app', [], new Client(['handler' => $handler]));
+
+        foreach ([
+            ['body' => str_repeat('ắ', 1000)],
+            ['body' => str_repeat('🏠', 1000)],
+            [
+                'body' => str_repeat('🏠', 1000),
+                'file' => UploadedFile::fake()->create(str_repeat('🏠', 251).'.pdf', 100, 'application/pdf'),
+            ],
+        ] as $index => $data) {
+            $this->actingAs($this->student, 'sanctum')
+                ->post("/api/conversations/{$conv->id}/messages", $data)
+                ->assertStatus(201)
+                ->assertJsonPath('data.body', $data['body']);
+
+            $event = Event::dispatched(MessageSent::class)->last()[0];
+            $this->assertInstanceOf(MessageSent::class, $event);
+            $pusher->trigger(
+                array_map(fn ($channel) => (string) $channel, $event->broadcastOn()),
+                $event->broadcastAs(),
+                $event->broadcastWith(),
+            );
+            $request = $requests[$index]['request'];
+            $payload = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            $this->assertLessThanOrEqual(
+                (int) config('reverb.servers.reverb.max_request_size'),
+                strlen(HttpMessage::toString($request)),
+            );
+            $this->assertLessThanOrEqual(
+                (int) config('reverb.apps.apps.0.max_message_size'),
+                strlen($payload['data']),
+            );
+        }
+    }
+
     public function test_message_sent_event_matches_message_resource_shape(): void
     {
         // The realtime payload must mirror MessageResource (contract §3):
@@ -536,6 +632,35 @@ class ConversationTest extends TestCase
         $this->get($url)
             ->assertOk()
             ->assertHeader('Content-Type', 'application/pdf');
+    }
+
+    public function test_realtime_attachment_urls_open_on_the_frontend_origin(): void
+    {
+        Event::fake([MessageSent::class]);
+        $conv = $this->createConversation();
+
+        foreach ([
+            UploadedFile::fake()->create('hop-dong.pdf', 100, 'application/pdf'),
+            UploadedFile::fake()->image('phong.jpg'),
+        ] as $file) {
+            $this->actingAs($this->landlord, 'sanctum')
+                ->post("/api/conversations/{$conv->id}/messages", ['file' => $file])
+                ->assertStatus(201);
+
+            $event = Event::dispatched(MessageSent::class)->last()[0];
+            $this->assertInstanceOf(MessageSent::class, $event);
+            $url = $event->broadcastWith()['message']['attachment_url'];
+            $this->assertIsString($url);
+            $this->assertStringStartsWith('/attachments/', $url);
+
+            $this->get('http://localhost:5174'.$url)
+                ->assertOk()
+                ->assertHeader('Content-Type', $file->getMimeType());
+
+            $this->travel(61)->minutes();
+            $this->get('http://localhost:5174'.$url)->assertForbidden();
+            $this->travelBack();
+        }
     }
 
     public function test_attachment_signed_url_stops_working_after_unsend(): void

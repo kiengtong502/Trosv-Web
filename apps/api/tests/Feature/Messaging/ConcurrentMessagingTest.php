@@ -89,6 +89,25 @@ class ConcurrentMessagingTest extends TestCase
         $this->assertSame($responses[0]['body']['data']['id'], $responses[1]['body']['data']['id']);
         $this->assertDatabaseCount('conversations', 1);
         $this->assertDatabaseCount('conversation_listing', 1);
+        $this->assertDatabaseCount('messages', 2);
+    }
+
+    public function test_simultaneous_contacts_send_only_one_greeting_and_room_link(): void
+    {
+        $student = User::factory()->student()->create();
+        $listing = Listing::factory()->create();
+        $conversation = Conversation::factory()->create([
+            'student_id' => $student->id,
+            'landlord_id' => $listing->user_id,
+            'listing_id' => $listing->id,
+        ]);
+        $job = ['user' => $student->id, 'method' => 'POST', 'path' => '/api/conversations', 'body' => ['listing_id' => $listing->id]];
+        $responses = $this->race([$job, $job], 'room-link');
+
+        $this->assertSame($conversation->id, $responses[0]['body']['data']['id']);
+        $this->assertSame($conversation->id, $responses[1]['body']['data']['id']);
+        $this->assertDatabaseCount('messages', 2);
+        $this->assertSame(1, $conversation->messages()->where('body', "/rooms/{$listing->id}")->count());
     }
 
     public function test_simultaneous_reactions_preserve_both_participants(): void

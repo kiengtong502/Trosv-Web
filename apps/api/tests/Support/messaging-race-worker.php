@@ -43,10 +43,14 @@ DB::listen(static function (QueryExecuted $query) use ($job, &$waited, &$reads, 
     if (! str_starts_with($query->sql, 'select')) {
         return;
     }
-    if ($job['mode'] === 'conversation' && ! $waited && str_contains($query->sql, 'from "conversations"')) {
-        // Both lookups must observe an absent conversation before either INSERT.
+    if (in_array($job['mode'], ['conversation', 'room-link'], true) && ! $waited && str_contains($query->sql, 'from "conversations"')) {
+        // Release both requests after their first conversation lookup.
         $waited = true;
         $wait();
+    }
+    if ($job['mode'] === 'room-link' && str_contains($query->sql, 'from "messages"') && str_contains($query->sql, 'exists')) {
+        // Keep the old check-then-insert window open so both requests can observe it.
+        usleep(200000);
     }
     if ($job['mode'] === 'message' && $reads === 2 && str_contains($query->sql, 'from "messages"')) {
         // Without a row lock the other request can read the same stale snapshot.
