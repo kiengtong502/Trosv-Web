@@ -47,7 +47,9 @@ export function SuggestionResults({ s }: { s: AreaSuggestions }) {
           className="pt-6"
         />
       ) : (
-        s.rows.map((area, i) => <SuggestionCard key={area.ward_id ?? i} area={area} />)
+        s.rows.map((area, i) => (
+          <SuggestionCard key={area.ward_id ?? i} area={area} schoolId={s.resultSchoolId} />
+        ))
       )}
       <p className="text-xs text-muted">Gợi ý tham khảo do AI tạo ra</p>
     </div>

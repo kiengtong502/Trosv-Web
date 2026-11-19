@@ -13,6 +13,7 @@ export function useAreaSuggestions() {
   const [max, setMax] = useState(user?.budget_max != null ? String(user.budget_max) : "");
   const [picks, setPicks] = useState<string[]>([]);
   const [rows, setRows] = useState<AiAreaSuggestion[] | null>(null);
+  const [resultSchoolId, setResultSchoolId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,6 +26,7 @@ export function useAreaSuggestions() {
       if (min) payload["budget_min"] = Number(min);
       if (max) payload["budget_max"] = Number(max);
       setRows(await aiAreaSuggestions(payload));
+      setResultSchoolId(schoolId);
     } catch (err) {
       setError(aiErrorMessage(err));
     } finally {
@@ -46,6 +48,7 @@ export function useAreaSuggestions() {
       setPicks((cur) => toggleId(cur, value));
     },
     rows,
+    resultSchoolId,
     busy,
     error,
     suggest,
