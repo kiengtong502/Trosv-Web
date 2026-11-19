@@ -1,6 +1,6 @@
 # ============================================================
 # TROSV backend - FrankenPHP (Caddy + PHP 8.3), Debian 13 "trixie".
-# Mot image cho moi vai tro: web (frankenphp), reverb, queue, scheduler,
+# Mot image cho moi vai tro: web (frankenphp), reverb,
 # test (compose doi lenh). Khong con `php artisan serve` (dev server cua PHP).
 # ============================================================
 FROM dunglas/frankenphp:1-php8.3-trixie
@@ -49,9 +49,9 @@ USER 33:33
 EXPOSE 8000
 
 # Image goc cua FrankenPHP co HEALTHCHECK goi admin API cua Caddy (:2019) - da tat
-# (admin off) va cac service khac (queue, scheduler, reverb) khong phai web server.
+# (admin off) va service reverb khong phai web server.
 # Compose khai bao healthcheck rieng cho backend va reverb.
 HEALTHCHECK NONE
 
-# Web server. Cac service khac (reverb, queue, scheduler) ghi de bang `command:`.
+# Web server. Reverb ghi de bang `command:`.
 CMD ["--config", "/etc/frankenphp/Caddyfile", "--adapter", "caddyfile"]

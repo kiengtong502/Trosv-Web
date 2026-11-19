@@ -36,8 +36,8 @@ Browser (React SPA)  ──JSON + Bearer token──▶  Laravel API  ──▶ 
 | AI service (loopback only, not exposed to the network) | http://localhost:8001 |
 | Reverb websocket | `:8080` |
 
-`make up` starts the Docker stack (db, backend, frontend, reverb, queue,
-scheduler). The AI service is behind a profile: `docker compose --profile ai up -d`.
+`make up` starts the Docker stack (db, backend, frontend, reverb).
+The AI service is behind a profile: `docker compose --profile ai up -d`.
 It runs in `FAKE_MODE` by default (rule-based, no API key). The root `.env` needs
 `APP_KEY` and the `REVERB_*` values (see `.env.example`); `SEED_ON_BOOT=1` loads
 demo data.
@@ -78,9 +78,8 @@ Messaging rules worth knowing:
 
 Infrastructure: the `backend` container serves the API with FrankenPHP (Caddy +
 PHP, config in `apps/api/docker/`), not `php artisan serve`; the same image runs
-`reverb`, `queue` and `scheduler`, all as `www-data`. `queue` and `scheduler` wait for
-a healthy `backend` (migrations done). A `queue` container runs `queue:work`. A
-`scheduler` container runs `schedule:run` every minute, but **no tasks are scheduled yet**.
+`reverb`, both as `www-data`. Chat events broadcast immediately through Reverb.
+No queue worker or scheduler is needed: the application has no queued jobs or scheduled tasks.
 `php artisan serve` is for local development only.
 
 ### Backend layout
@@ -251,7 +250,7 @@ add a feature that imports back into one that already imports it.
   an artifact) and `_stack.yml` (starts the real docker compose stack, the thing
   that ships, and runs `scripts/stack-smoke.py` against it: uploads through nginx,
   `/storage`, signed attachments, size limits, and a chat message delivered over
-  Reverb; then checks queue/scheduler started without errors; run it locally with
+  Reverb; run it locally with
   `make smoke-stack`). Setup is shared through local composite actions in
   `.github/actions/` (PHP, Node, Python; Composer, npm, pip and Playwright
   caches). `ci-ok` is the one check to require in branch protection (skipped

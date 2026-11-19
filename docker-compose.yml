@@ -22,7 +22,7 @@
 #   * restart: unless-stopped + log rotation (10MB x 3) tren moi service
 #   * healthcheck moi service (curl tren Debian trixie - khong co wget)
 #   * conection DB noi bo mang compose, khong publish 5432 ra host
-#   * queue + scheduler chay rieng; storage upload nam trong volume
+#   * storage upload nam trong volume
 #   * APP_ENV/APP_DEBUG/APP_KEY bat buoc tu .env - khong co gia tri mac
 #     dinh an toan gia: thieu la compose TU CHOI chay (fail-fast thay vi
 #     boot voi cau hinh yeu). Backend con tu choi serve neu APP_DEBUG=true.
@@ -174,40 +174,6 @@ services:
       start_period: 15s
     depends_on:
       - backend
-
-  queue:
-    build: ./apps/api
-    command: php artisan queue:work --tries=3 --timeout=30
-    restart: unless-stopped
-    logging: *default-logging
-    env_file:
-      - path: ./apps/api/.env
-        required: false
-    environment: *backend-env
-    # Cho backend healthy (da migrate xong): neu khong, lan khoi dong dau worker
-    # chay khi bang cache/jobs chua ton tai.
-    depends_on:
-      db:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
-
-  scheduler:
-    build: ./apps/api
-    command: sh -c "while true; do php artisan schedule:run; sleep 60; done"
-    restart: unless-stopped
-    logging: *default-logging
-    env_file:
-      - path: ./apps/api/.env
-        required: false
-    environment: *backend-env
-    # Cho backend healthy (da migrate xong): neu khong, lan khoi dong dau worker
-    # chay khi bang cache/jobs chua ton tai.
-    depends_on:
-      db:
-        condition: service_healthy
-      backend:
-        condition: service_healthy
 
   frontend:
     build:

@@ -130,7 +130,7 @@ Merge vào `stable` khi xanh là tự động deploy.
 ```
 trosv/
 ├── Makefile             # Quản lý và kiểm tra nhanh (help, up, down, check, smoke, ...)
-├── docker-compose.yml   # DB + backend + frontend + reverb + queue + scheduler
+├── docker-compose.yml   # DB + backend + frontend + reverb
 │                        # (+ caddy khi profile tls, + ai-service khi profile ai)
 ├── .env.example
 ├── CONTRIBUTING.md      # Quy ước đóng góp, nhánh git, commit style
