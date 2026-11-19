@@ -37,7 +37,9 @@ jobs:
             shellcheck --severity=warning scripts/*.sh infra/backup/backup.sh infra/deploy/deploy.sh
 
       - name: Backup retention regression
-        run: python3 scripts/test-backup-retention.py
+        run: |
+          python3 scripts/test-backup-retention.py
+          python3 scripts/test-backup-atomic.py
 
       # Dummy values only: this validates the compose file, nothing is started.
       - name: docker compose config

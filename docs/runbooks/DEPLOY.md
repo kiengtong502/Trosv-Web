@@ -28,7 +28,7 @@ duy nhất; có thể dùng danh sách IP/CIDR proxy tin cậy thay cho `*`.
 ## 0. Yêu cầu (Debian)
 
 - Debian 12/13, 2 GB RAM là đủ (stack: PostgreSQL + PHP + nginx + Caddy +
-  Reverb + queue).
+  Reverb).
 - Docker Engine **28 trở lên** + plugin Compose. Bản Docker cũ hơn có hạn chế
   bảo vệ cổng loopback trên cùng mạng LAN; xem [tài liệu Docker](https://docs.docker.com/engine/network/port-publishing/).
   Cách cài nếu chưa có:
@@ -154,14 +154,22 @@ docker compose down -v                   # XÓA pgdata + uploads - cẩn trọng
 Script sẵn sàng: `infra/backup/backup.sh` (dump DB + tar uploads + bản sao
 `.env`, giữ 7 ngày + 4 chủ nhật). Cron trên máy chủ:
 
+Script tạo bộ tạm, kiểm tra đủ ba tệp rồi mới ghi dấu `complete-<timestamp>`
+và xoay vòng các bộ đã xác nhận. `.env` không được rỗng; cần có `flock`
+(có sẵn trong util-linux trên Debian). Thư mục backup dùng quyền `700`,
+tệp mới dùng `600`. Bộ cũ chưa có dấu xác nhận được giữ nguyên.
+
 ```bash
+install -d -m 700 backups
 sudo crontab -e -u "$USER"
 # 02:30 hằng ngày:
 30 2 * * * cd /srv/trosv && ./infra/backup/backup.sh >> ./backups/backup.log 2>&1
 ```
 
 Restore drill + quy trình: `infra/backup/RESTORE.md`. Rollback code:
-`docs/runbooks/ROLLBACK.md`. Kiểm tra lại backup định kỳ: `./infra/backup/backup.sh --verify`.
+`docs/runbooks/ROLLBACK.md`. Mỗi lượt backup đều kiểm tra gzip/tar trước khi
+chốt; `./infra/backup/backup.sh --verify` vẫn được chấp nhận như lệnh cũ.
+Việc này không thay thế thử khôi phục định kỳ theo runbook restore.
 
 ## 7. Gotchas
 

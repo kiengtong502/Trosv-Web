@@ -9,8 +9,8 @@ import tempfile
 
 script = (Path(__file__).resolve().parents[1] / "infra/backup/backup.sh").read_text(encoding="utf-8")
 lines = script.splitlines()
-start = next(i for i, line in enumerate(lines) if line.startswith("# 4. Xoa ban cu:"))
-end = next(i for i, line in enumerate(lines) if line.startswith("# 5. Verify"))
+start = next(i for i, line in enumerate(lines) if line.startswith("# 5. Xoa ban cu:"))
+end = next(i for i, line in enumerate(lines) if line.startswith("# 6. Hoan tat"))
 # Exercise the actual pruning block without starting Docker or reading .env.
 prune = "\n".join(lines[start + 1:end])
 sunday = datetime(2026, 11, 15, 12)
@@ -30,9 +30,15 @@ for name, dates in cases.items():
         retained = set(dates[:7]) | set([day for day in dates if day.weekday() == 6][:4])
         expected = {"unrelated.txt"}
         (root / "unrelated.txt").write_text("keep me", encoding="utf-8")
+        # Legacy/unconfirmed files and incomplete sets never count or get pruned.
+        for filename in ("db-20500101-000000.sql.gz", "uploads-20500101-000000.tar.gz",
+                         "env-20500101-000000.bak", "complete-20500102-000000",
+                         "db-20500102-000000.sql.gz"):
+            (root / filename).write_text("unconfirmed fixture", encoding="utf-8")
+            expected.add(filename)
         for day in dates:
             timestamp = day.strftime("%Y%m%d-%H%M%S")
-            for filename in (f"db-{timestamp}.sql.gz", f"uploads-{timestamp}.tar.gz", f"env-{timestamp}.bak"):
+            for filename in (f"db-{timestamp}.sql.gz", f"uploads-{timestamp}.tar.gz", f"env-{timestamp}.bak", f"complete-{timestamp}"):
                 path = root / filename
                 path.write_text("test fixture", encoding="utf-8")
                 os.utime(path, (day.timestamp(), day.timestamp()))

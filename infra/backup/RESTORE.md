@@ -11,13 +11,24 @@ Chạy trên máy chủ Debian, trong thư mục repo (ví dụ `/srv/trosv`).
 ## 0. Chọn bản backup
 
 Script giữ 7 bản mới nhất và 4 bản Chủ nhật mới nhất; bản thuộc cả hai nhóm
-chỉ tính một lần. Các tệp database, uploads và `.env` cùng timestamp được
-giữ hoặc xóa cùng nhau. Chính sách này không khôi phục những bản đã bị xóa trước đó.
+chỉ tính một lần. Chỉ bộ có dấu `complete-<timestamp>` và đủ ba tệp database,
+uploads, `.env` mới được tính vào chính sách này. Dấu xác nhận được tạo sau
+khi script kiểm tra gzip, đọc danh sách tệp tar và kiểm tra dump có bảng.
+Đây chưa phải là kiểm chứng khôi phục database thật.
+
+Thư mục backup có quyền `700`, các tệp backup mới có quyền `600`. Script
+dùng `flock` để tránh hai lượt backup chạy chồng nhau và yêu cầu `.env`
+không rỗng. Lỗi ở bất kỳ bước tạo/kiểm tra nào sẽ dừng trước khi xoay vòng.
+Các tệp cũ chưa có dấu xác nhận được giữ nguyên, không tự đếm hoặc xóa;
+nếu cần dùng chúng, hãy tự kiểm tra đủ bộ và thử khôi phục trước.
 
 ```bash
-ls -1t backups/db-*.sql.gz | head -5
+ls -1t backups/complete-* | head -5
 TS=20260927-023000   # ts của bản muốn restore
+test -f "backups/complete-$TS"
 ls -lh backups/{db-$TS.sql.gz,uploads-$TS.tar.gz,env-$TS.bak}
+gzip -t "backups/db-$TS.sql.gz"
+tar -tzf "backups/uploads-$TS.tar.gz" > /dev/null
 ```
 
 Mọi lệnh dưới đây dùng hai biến chung (runtime: Docker hoặc Podman -
@@ -42,7 +53,7 @@ echo "$VOL_PG / $VOL_STORAGE"   # phải in ra đúng 2 tên, không được tr
 ## 1. Dừng toàn bộ stack
 
 ```bash
-$DC stop caddy backend reverb queue scheduler db
+$DC stop caddy backend reverb db
 ```
 
 ## 2. Xóa + tạo lại volume Postgres (KHÔNG ĐƯỜNG LÙI)
@@ -130,6 +141,6 @@ UI.
 
 ## Sau restore
 
-- Kiểm tra `docker compose logs -f --tail 50 backend queue reverb` trong
+- Kiểm tra `docker compose logs -f --tail 50 backend reverb` trong
   vài phút đầu.
 - Nếu cron backup đã tồn tại (chạy `infra/backup/backup.sh`), nó sẽ tự chạy bước tới - không cần làm gì thêm.
