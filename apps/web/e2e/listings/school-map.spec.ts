@@ -22,8 +22,20 @@ test("selected school has a separate pin, campus popup and optional radius", asy
   await page.goto("/rooms");
   await expect(page.locator(".trosv-school-marker")).toHaveCount(0);
   await page.getByRole("button", { name: "Chọn trường", exact: true }).click();
+  const resultsLoaded = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.pathname.endsWith("/listings") &&
+      url.searchParams.get("school_id") === String(school.id) &&
+      url.searchParams.get("per_page") === "50"
+    );
+  });
   await page.locator("#filter-school").selectOption(String(school.id));
   await page.keyboard.press("Escape");
+  await resultsLoaded;
+  await expect(page.locator('p[aria-live="polite"]')).toContainText("phòng trọ");
+  // A visible marker can still move while Leaflet fits the filtered results.
+  await expect(page.locator(".leaflet-zoom-anim, .leaflet-pan-anim")).toHaveCount(0);
   const marker = page.locator(".trosv-school-marker");
   await expect(marker).toHaveCount(1);
   await expect(marker).toBeVisible();

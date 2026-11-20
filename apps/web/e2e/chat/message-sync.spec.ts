@@ -19,7 +19,7 @@ for (const width of [1280, 390]) {
     const initialGate = new Promise<void>((resolve) => {
       releaseInitial = resolve;
     });
-    let firstRequest = true;
+    let initialReleased = false;
     let reads = 0;
     const cursors: number[] = [];
     const sockets: WebSocketRoute[] = [];
@@ -51,10 +51,7 @@ for (const width of [1280, 390]) {
       const after = Number(new URL(route.request().url()).searchParams.get("after_id") ?? 0);
       cursors.push(after);
       const snapshot = messages.filter((row) => row.id > after).slice(0, 500);
-      if (firstRequest) {
-        firstRequest = false;
-        await initialGate;
-      }
+      if (!initialReleased) await initialGate;
       await route.fulfill({ json: { data: snapshot } });
     });
     await page.routeWebSocket(/\/app\//, (socket) => {
@@ -87,7 +84,7 @@ for (const width of [1280, 390]) {
     });
     await page.goto("/messages/901");
     await expect.poll(() => subscriptions).toBe(1);
-    await expect.poll(() => cursors.length).toBe(1);
+    await expect.poll(() => cursors.length).toBeGreaterThan(0);
     messages.push(message(502), message(503));
     sockets[0]!.send(
       JSON.stringify({
@@ -97,6 +94,7 @@ for (const width of [1280, 390]) {
       }),
     );
     expect(reads).toBe(0);
+    initialReleased = true;
     releaseInitial();
     const thread = page.getByTestId("thread");
     await expect(thread.getByText("Sync message 501", { exact: true })).toHaveCount(1);
@@ -104,10 +102,14 @@ for (const width of [1280, 390]) {
     await expect(thread.getByText("Sync message 503", { exact: true })).toHaveCount(1);
     await expect.poll(() => reads).toBeGreaterThan(0);
     expect(cursors).toContain(500);
+    const reconnectStart = cursors.length;
+    messages[0]!.body = "Updated while disconnected";
     messages.push(message(504)); // Persisted while disconnected; no realtime event.
     await sockets[0]!.close({ code: 4200, reason: "Simulated reconnect" });
     await expect.poll(() => subscriptions, { timeout: 15000 }).toBe(2);
     await expect(thread.getByText("Sync message 504", { exact: true })).toHaveCount(1);
-    expect(cursors).toContain(503);
+    await expect(thread.getByText("Updated while disconnected", { exact: true })).toHaveCount(1);
+    expect(cursors.slice(reconnectStart)).toContain(0);
+    expect(cursors.slice(reconnectStart)).toContain(500);
   });
 }
